@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Ledger Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        zinc: {
+                            50: '#fafafa',
+                            100: '#f4f4f5',
+                            200: '#e4e4e7',
+                            300: '#d4d4d8',
+                            400: '#a1a1aa',
+                            500: '#71717a',
+                            600: '#52525b',
+                            700: '#3f3f46',
+                            800: '#27272a',
+                            900: '#18181b',
+                            950: '#09090b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/styles.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+        .dark ::-webkit-scrollbar-thumb { background: #3f3f46; }
+        .dark ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+    </style>
+</head>
+<body class="min-h-screen bg-zinc-50 text-zinc-900 selection:bg-zinc-900 selection:text-white">
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-8">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-zinc-900/10">
+                    <i data-lucide="trending-up" class="w-6 h-6 text-white"></i>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold tracking-tight">Stock Ledger Pro</h1>
+                    <p class="text-sm text-zinc-500">交易紀錄 & 損益試算</p>
+                </div>
+            </div>
+            <button onclick="openModal()" class="flex items-center gap-2 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-xl font-medium transition-all shadow-lg shadow-zinc-900/20 active:scale-95">
+                <i data-lucide="plus" class="w-5 h-5"></i>
+                <span>記一筆</span>
+            </button>
+        </header>
+
+        <!-- Market Tabs -->
+        <div class="flex space-x-1 bg-zinc-100 p-1 rounded-xl mb-8 w-fit" id="marketTabs">
+            <!-- Injected by JS -->
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8" id="summaryCards">
+            <!-- Injected by JS -->
+        </div>
+
+        <!-- Transaction List -->
+        <div class="space-y-6">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-semibold" id="listTitle">交易明細</h2>
+                <span class="text-sm text-zinc-500" id="recordCount">0 筆紀錄</span>
+            </div>
+            
+            <div class="bg-white rounded-2xl shadow-sm border border-zinc-100 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-zinc-100">
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="date">
+                                    <div class="flex items-center gap-1 pointer-events-none">日期 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-date"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="stock">
+                                    <div class="flex items-center gap-1 pointer-events-none">股票 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-stock"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="holding">
+                                    <div class="flex items-center gap-1 pointer-events-none">持有時間 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-holding"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right whitespace-nowrap">買入價</th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right whitespace-nowrap">股數</th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="cost">
+                                    <div class="flex items-center gap-1 justify-end pointer-events-none">成本 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-cost"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right whitespace-nowrap">賣出價</th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="fees">
+                                    <div class="flex items-center gap-1 justify-end pointer-events-none">稅費 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-fees"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="profit">
+                                    <div class="flex items-center gap-1 justify-end pointer-events-none">損益金額 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-profit"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-right cursor-pointer hover:bg-zinc-50 whitespace-nowrap" data-sort="profitPercent">
+                                    <div class="flex items-center gap-1 justify-end pointer-events-none">報酬率 <i data-lucide="arrow-up-down" class="w-3 h-3 opacity-30 sort-icon" id="sort-profitPercent"></i></div>
+                                </th>
+                                <th class="p-4 text-xs font-medium text-zinc-500 uppercase tracking-wider text-center whitespace-nowrap">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactionTableBody" class="divide-y divide-zinc-100">
+                            <!-- Injected by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="transactionModal" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 bg-black/20 backdrop-blur-sm" onclick="closeModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-lg">
+            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-zinc-100 m-4">
+                <div class="flex justify-between items-center p-6 border-b border-zinc-100">
+                    <h2 class="text-xl font-semibold text-zinc-900" id="modalTitle">新增交易</h2>
+                    <button onclick="closeModal()" class="p-2 hover:bg-zinc-100 rounded-full transition-colors">
+                        <i data-lucide="x" class="w-5 h-5 text-zinc-500"></i>
+                    </button>
+                </div>
+
+                <form id="transactionForm" onsubmit="handleFormSubmit(event)" class="p-6 space-y-4">
+                    <input type="hidden" id="tradeId">
+                    
+                    <!-- Market Selection in Form -->
+                    <div class="flex gap-2 p-1 bg-zinc-100 rounded-lg" id="formMarketTabs">
+                        <!-- Injected by JS -->
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-zinc-700">買入日期</label>
+                            <input type="date" id="buyDate" required class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-zinc-700">股票代號 (選填)</label>
+                            <input type="text" id="stockSymbol" placeholder="2330" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all">
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium text-zinc-700">股票名稱</label>
+                        <input type="text" id="stockName" required placeholder="台積電" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-zinc-700">買入價格</label>
+                            <input type="number" id="buyPrice" required step="0.01" oninput="calculateExpected()" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-mono">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-zinc-700">股數</label>
+                            <input type="number" id="quantity" required oninput="calculateExpected()" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-mono">
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-t border-zinc-100">
+                        <h3 class="text-sm font-semibold text-zinc-900 mb-4">賣出資訊 (選填)</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium text-zinc-700">賣出日期</label>
+                                <input type="date" id="sellDate" onchange="toggleExpectedInput()" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium text-zinc-700">賣出價格</label>
+                                <input type="number" id="sellPrice" step="0.01" placeholder="尚未賣出" oninput="toggleExpectedInput()" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-mono">
+                            </div>
+                        </div>
+                        
+                        <!-- Sell Quantity (Hidden by default, shown when selling) -->
+                        <div id="sellQuantitySection" class="hidden space-y-2">
+                             <label class="text-sm font-medium text-zinc-700">賣出股數</label>
+                             <input type="number" id="sellQuantity" placeholder="預設為全部賣出" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-mono">
+                             <p class="text-xs text-zinc-500">若賣出股數小於持有股數，系統將自動拆分交易。</p>
+                        </div>
+
+                        <!-- Expected Sell Price -->
+                        <div id="expectedSection" class="mt-4 space-y-2">
+                            <label class="text-sm font-medium text-blue-600 flex items-center gap-2">
+                                預期賣出價格 <span class="text-xs text-blue-400/80 font-normal">(試算用)</span>
+                            </label>
+                            <input type="number" id="expectedSellPrice" step="0.01" placeholder="輸入目標價進行試算" oninput="calculateExpected()" class="w-full px-3 py-2 rounded-lg border border-blue-200 bg-blue-50/50 focus:ring-2 focus:ring-blue-500 outline-none transition-all font-mono text-blue-700 placeholder-blue-300">
+                            
+                            <div id="expectedResult" class="hidden flex items-center justify-between px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 mt-2">
+                                <span class="text-xs text-blue-600">試算損益:</span>
+                                <div class="flex items-center gap-2">
+                                    <span id="expectedProfitVal" class="font-mono font-bold text-blue-700"></span>
+                                    <span id="expectedProfitPct" class="text-xs font-mono px-1.5 py-0.5 rounded bg-blue-100 text-blue-700"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-sm font-medium text-zinc-700">備註</label>
+                        <textarea id="note" class="w-full px-3 py-2 rounded-lg border border-zinc-200 bg-transparent focus:ring-2 focus:ring-zinc-900 outline-none transition-all resize-none h-20"></textarea>
+                    </div>
+
+                    <div class="flex justify-end gap-3 pt-4">
+                        <button type="button" onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors">取消</button>
+                        <button type="submit" class="px-4 py-2 text-sm font-medium text-white bg-zinc-900 rounded-lg hover:opacity-90 transition-opacity">儲存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="assets/script.js"></script>
+</body>
+</html>
