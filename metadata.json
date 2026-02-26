@@ -1,0 +1,5 @@
+{
+  "name": "Stock Ledger Pro",
+  "description": "A premium stock trading journal to track buys, sells, and calculate profits with automatic fee and tax handling.",
+  "requestFramePermissions": []
+}
