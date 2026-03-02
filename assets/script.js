@@ -211,27 +211,57 @@ function renderSummary(filteredTrades) {
         const calc = calculateTrade(trade);
         if (calc.isSold) {
             acc.realizedProfit += calc.profit;
+            acc.realizedCost += calc.totalCost;
             acc.totalTrades += 1;
             if (calc.profit > 0) acc.winningTrades += 1;
             acc.totalTax += calc.tax;
             acc.totalFees += calc.buyFee + calc.sellFee;
         } else {
             acc.holdingCost += calc.totalCost;
+            if (calc.expectedProfit !== undefined) {
+                acc.expectedProfit += calc.expectedProfit;
+                acc.expectedCost += calc.totalCost;
+            }
         }
         return acc;
-    }, { realizedProfit: 0, holdingCost: 0, totalTrades: 0, winningTrades: 0, totalTax: 0, totalFees: 0 });
+    }, { 
+        realizedProfit: 0, realizedCost: 0, 
+        holdingCost: 0, 
+        expectedProfit: 0, expectedCost: 0,
+        totalTrades: 0, winningTrades: 0, totalTax: 0, totalFees: 0 
+    });
+
+    // 1. Realized Return Rate
+    const realizedROI = stats.realizedCost > 0 ? (stats.realizedProfit / stats.realizedCost) * 100 : 0;
+
+    // 2. Total Profit (Realized + Estimated)
+    const totalProfit = stats.realizedProfit + stats.expectedProfit;
+    const totalCostForROI = stats.realizedCost + stats.expectedCost;
+    const totalROI = totalCostForROI > 0 ? (totalProfit / totalCostForROI) * 100 : 0;
 
     const winRate = stats.totalTrades > 0 ? (stats.winningTrades / stats.totalTrades) * 100 : 0;
-    const profitColor = stats.realizedProfit >= 0 ? 'text-red-500' : 'text-green-500';
-    const profitIcon = stats.realizedProfit >= 0 ? 'trending-up' : 'trending-down';
+    
+    // Formatting helpers
+    const getProfitColor = (val) => val >= 0 ? 'text-red-500' : 'text-green-500';
+    const getProfitIcon = (val) => val >= 0 ? 'trending-up' : 'trending-down';
+
+    const realizedColor = getProfitColor(stats.realizedProfit);
+    const totalColor = getProfitColor(totalProfit);
 
     const cards = [
         {
             icon: 'wallet', title: '已實現損益', 
             value: `${stats.realizedProfit > 0 ? '+' : ''}${stats.realizedProfit.toLocaleString()}`,
-            valClass: profitColor,
-            sub: null,
-            rightIcon: `<i data-lucide="${profitIcon}" class="w-5 h-5 ${profitColor}"></i>`
+            valClass: realizedColor,
+            sub: `報酬率: ${realizedROI.toFixed(2)}%`,
+            rightIcon: `<i data-lucide="${getProfitIcon(stats.realizedProfit)}" class="w-5 h-5 ${realizedColor}"></i>`
+        },
+        {
+            icon: 'calculator', title: '含試算損益',
+            value: `${totalProfit > 0 ? '+' : ''}${totalProfit.toLocaleString()}`,
+            valClass: totalColor,
+            sub: `含試算報酬率: ${totalROI.toFixed(2)}%`,
+            rightIcon: `<i data-lucide="${getProfitIcon(totalProfit)}" class="w-5 h-5 ${totalColor}"></i>`
         },
         {
             icon: 'pie-chart', title: '勝率',
@@ -240,10 +270,10 @@ function renderSummary(filteredTrades) {
             sub: `${stats.winningTrades} / ${stats.totalTrades} 筆交易`
         },
         {
-            icon: 'coins', title: '交易成本 (稅+手續費)',
+            icon: 'coins', title: '交易成本',
             value: (stats.totalTax + stats.totalFees).toLocaleString(),
             valClass: 'text-zinc-900',
-            sub: null
+            sub: '稅 + 手續費'
         },
         {
             icon: 'briefcase', title: '庫存成本',
