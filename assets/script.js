@@ -8,7 +8,7 @@ let editingId = null;
 let originalEditingQuantity = 0;
 
 // --- Constants ---
-const MARKETS = ['TW', 'US', 'UK'];
+const MARKETS = ['TW', 'US', 'UK', 'BOND'];
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 // --- Initialization ---
@@ -63,7 +63,18 @@ async function fetchTrades() {
         if (!res.ok) throw new Error('Network response was not ok');
         const data = await res.json();
         if (data) {
-            trades = Object.keys(data).map(key => ({ ...data[key], id: key }));
+            trades = Object.keys(data).map(key => {
+                let t = { ...data[key], id: key };
+                if ((t.stockSymbol === 'PBI-B' || t.stockSymbol === 'BHFAL' || t.stockName === 'PBI-B' || t.stockName === 'BHFAL') && t.market !== 'BOND') {
+                    t.market = 'BOND';
+                    fetch(`${DB_URL}/${key}.json`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ market: 'BOND' }),
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                return t;
+            });
         } else {
             trades = [];
         }
@@ -140,8 +151,22 @@ function calculateTrade(trade) {
     const diffTime = Math.abs(end - start);
     const holdingDays = Math.max(1, Math.ceil(diffTime / MS_PER_DAY));
 
+    const interest = parseFloat(trade.interest) || 0;
+
+    if (trade.type === 'dividend') {
+        return {
+            isDividend: true,
+            interest: interest,
+            profit: interest,
+            profitPercent: 0,
+            totalCost: 0,
+            buyAmount: 0, buyFee: 0, holdingDays: 0,
+            isSold: false, sellAmount: 0, sellFee: 0, tax: 0, netIncome: 0, annualizedReturn: 0
+        };
+    }
+
     const result = {
-        buyAmount, buyFee, totalCost, holdingDays,
+        buyAmount, buyFee, totalCost, holdingDays, interest,
         isSold: false,
         sellAmount: 0, sellFee: 0, tax: 0, netIncome: 0, profit: 0, profitPercent: 0, annualizedReturn: 0
     };
@@ -163,20 +188,30 @@ function calculateTrade(trade) {
         result.sellFee = m.sFee;
         result.tax = m.sTax;
         result.netIncome = m.nIncome;
-        result.profit = m.p;
-        result.profitPercent = m.pPercent;
+        result.profit = m.p + interest;
+        result.profitPercent = totalCost > 0 ? (result.profit / totalCost) * 100 : 0;
 
-        if (totalCost > 0 && m.nIncome > 0) {
-            const totalReturnRatio = m.nIncome / totalCost;
+        if (totalCost > 0 && (m.nIncome + interest) > 0) {
+            const totalReturnRatio = (m.nIncome + interest) / totalCost;
             const years = holdingDays / 365;
             result.annualizedReturn = (Math.pow(totalReturnRatio, 1 / years) - 1) * 100;
         } else if (totalCost > 0) {
             result.annualizedReturn = -100;
         }
-    } else if (trade.expectedSellPrice) {
-        const m = calcMetrics(trade.expectedSellPrice);
-        result.expectedProfit = m.p;
-        result.expectedProfitPercent = m.pPercent;
+    } else {
+        result.profit = interest;
+        result.profitPercent = totalCost > 0 ? (interest / totalCost) * 100 : 0;
+        if (totalCost > 0 && interest > 0) {
+            const totalReturnRatio = (totalCost + interest) / totalCost;
+            const years = holdingDays / 365;
+            result.annualizedReturn = (Math.pow(totalReturnRatio, 1 / years) - 1) * 100;
+        }
+        
+        if (trade.expectedSellPrice) {
+            const m = calcMetrics(trade.expectedSellPrice);
+            result.expectedProfit = m.p + interest;
+            result.expectedProfitPercent = totalCost > 0 ? (result.expectedProfit / totalCost) * 100 : 0;
+        }
     }
 
     return result;
@@ -198,17 +233,26 @@ function renderMarketTabs() {
     container.innerHTML = MARKETS.map(m => `
         <button onclick="setMarket('${m}')" 
             class="px-6 py-2 rounded-lg text-sm font-medium transition-colors ${currentMarket === m ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}">
-            ${m === 'TW' ? '台股' : m === 'US' ? '美股' : '英股'}
+            ${m === 'TW' ? '台股' : m === 'US' ? '美股' : m === 'UK' ? '英股' : '債券'}
         </button>
     `).join('');
     
     const titleEl = document.getElementById('listTitle');
-    if (titleEl) titleEl.textContent = `交易明細 (${currentMarket === 'TW' ? '台股' : currentMarket === 'US' ? '美股' : '英股'})`;
+    if (titleEl) titleEl.textContent = `交易明細 (${currentMarket === 'TW' ? '台股' : currentMarket === 'US' ? '美股' : currentMarket === 'UK' ? '英股' : '債券'})`;
 }
 
 function renderSummary(filteredTrades) {
+    if (currentMarket === 'BOND') {
+        renderBondSummary(filteredTrades);
+        return;
+    }
+
     const stats = filteredTrades.reduce((acc, trade) => {
         const calc = calculateTrade(trade);
+        if (calc.isDividend) {
+            acc.realizedProfit += calc.interest;
+            return acc;
+        }
         if (calc.isSold) {
             acc.realizedProfit += calc.profit;
             acc.realizedCost += calc.totalCost;
@@ -218,6 +262,10 @@ function renderSummary(filteredTrades) {
             acc.totalFees += calc.buyFee + calc.sellFee;
         } else {
             acc.holdingCost += calc.totalCost;
+            if (calc.interest > 0) {
+                acc.realizedProfit += calc.interest;
+                acc.realizedCost += calc.totalCost;
+            }
             if (calc.expectedProfit !== undefined) {
                 acc.expectedProfit += calc.expectedProfit;
                 acc.expectedCost += calc.totalCost;
@@ -303,6 +351,147 @@ function renderSummary(filteredTrades) {
     }
 }
 
+function renderBondSummary(filteredTrades) {
+    const container = document.getElementById('summaryCards');
+    if (!container) return;
+
+    if (filteredTrades.length === 0) {
+        container.innerHTML = '<div class="col-span-full text-center text-zinc-500 py-8">尚無債券紀錄</div>';
+        return;
+    }
+
+    const bonds = {};
+
+    filteredTrades.forEach(trade => {
+        const symbol = trade.stockSymbol || trade.stockName;
+        if (!bonds[symbol]) {
+            bonds[symbol] = {
+                name: trade.stockName,
+                totalShares: 0,
+                totalInterest: 0,
+                holdingCost: 0,
+                totalHoldingDays: 0,
+                activeTrades: 0,
+                realizedProfitWithoutInterest: 0,
+                realizedCostWithoutInterest: 0
+            };
+        }
+        
+        const calc = calculateTrade(trade);
+        
+        if (calc.isDividend) {
+            bonds[symbol].totalInterest += calc.interest;
+        } else if (calc.isSold) {
+            bonds[symbol].realizedProfitWithoutInterest += (calc.profit - calc.interest);
+            bonds[symbol].realizedCostWithoutInterest += calc.totalCost;
+            bonds[symbol].totalInterest += calc.interest;
+        } else {
+            bonds[symbol].totalShares += parseFloat(trade.quantity);
+            bonds[symbol].holdingCost += calc.totalCost;
+            bonds[symbol].totalInterest += calc.interest;
+            bonds[symbol].totalHoldingDays += calc.holdingDays;
+            bonds[symbol].activeTrades += 1;
+        }
+    });
+
+    const cardsHtml = Object.keys(bonds).map(symbol => {
+        const b = bonds[symbol];
+        
+        // Calculate annualized returns
+        // We use average holding years for active trades
+        const avgYears = b.activeTrades > 0 ? (b.totalHoldingDays / b.activeTrades) / 365 : 0;
+        
+        let annReturnWith = 0;
+        let annReturnWithout = 0;
+
+        const totalCost = b.holdingCost + b.realizedCostWithoutInterest;
+        const totalProfitWithout = b.realizedProfitWithoutInterest;
+        const totalProfitWith = totalProfitWithout + b.totalInterest;
+
+        if (totalCost > 0 && avgYears > 0) {
+            const ratioWithout = (totalCost + totalProfitWithout) / totalCost;
+            annReturnWithout = (Math.pow(ratioWithout, 1 / avgYears) - 1) * 100;
+
+            const ratioWith = (totalCost + totalProfitWith) / totalCost;
+            annReturnWith = (Math.pow(ratioWith, 1 / avgYears) - 1) * 100;
+        } else if (totalCost > 0 && avgYears === 0 && b.realizedCostWithoutInterest > 0) {
+            // If all sold, we can't easily calculate annualized return without knowing exact holding days of sold ones.
+            // Let's just show total return % instead of annualized if avgYears is 0.
+            annReturnWithout = (totalProfitWithout / totalCost) * 100;
+            annReturnWith = (totalProfitWith / totalCost) * 100;
+        }
+
+        const getProfitColor = (val) => val >= 0 ? 'text-red-500' : 'text-green-500';
+        
+        const avgBuyPrice = b.totalShares > 0 ? b.holdingCost / b.totalShares : 0;
+
+        return `
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-zinc-100 flex flex-col justify-between col-span-1 md:col-span-2">
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex items-center gap-3">
+                        <div class="p-3 bg-zinc-900 rounded-xl text-white shadow-md shadow-zinc-900/10">
+                            <i data-lucide="landmark" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-zinc-500">${b.name} ${symbol !== b.name ? `(${symbol})` : ''}</p>
+                            <h3 class="text-2xl font-bold font-mono tracking-tight text-zinc-900 mt-1">${b.totalShares.toLocaleString()} <span class="text-sm font-sans font-normal text-zinc-500">股</span></h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-y-4 gap-x-6 mt-2 pt-4 border-t border-zinc-100">
+                    <div>
+                        <p class="text-xs font-medium text-zinc-500 mb-1">庫存成本</p>
+                        <p class="text-base font-mono font-semibold text-zinc-900">${b.holdingCost.toLocaleString()}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-zinc-500 mb-1">平均買入成本</p>
+                        <p class="text-base font-mono font-semibold text-zinc-900">${avgBuyPrice.toFixed(2)}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-zinc-500 mb-1">總計利息</p>
+                        <p class="text-base font-mono font-semibold text-green-600">+${b.totalInterest.toLocaleString()}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-zinc-500 mb-1">年化報酬 (含息)</p>
+                        <p class="text-base font-mono font-semibold ${getProfitColor(annReturnWith)}">${annReturnWith > 0 ? '+' : ''}${annReturnWith.toFixed(2)}%</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-zinc-500 mb-1">年化報酬 (不含息)</p>
+                        <p class="text-base font-mono font-semibold ${getProfitColor(annReturnWithout)}">${annReturnWithout > 0 ? '+' : ''}${annReturnWithout.toFixed(2)}%</p>
+                    </div>
+                </div>
+                
+                <div class="mt-4 pt-4 border-t border-zinc-100">
+                    <label class="text-xs font-medium text-blue-600 flex items-center gap-2 mb-2">
+                        試算賣出價格 <span class="text-[10px] text-blue-400/80 font-normal">(輸入目標價)</span>
+                    </label>
+                    <div class="flex flex-col gap-3">
+                        <input type="number" step="0.01" placeholder="例如: 25.5" 
+                            oninput="calculateBondExpected(this, ${b.totalShares}, ${b.holdingCost}, ${b.realizedCostWithoutInterest}, ${totalProfitWithout}, ${b.totalInterest}, ${avgYears})" 
+                            class="w-full px-3 py-2 text-sm rounded-lg border border-blue-200 bg-blue-50/50 focus:ring-2 focus:ring-blue-500 outline-none transition-all font-mono text-blue-700 placeholder-blue-300">
+                        
+                        <div class="hidden expected-bond-result grid grid-cols-2 gap-3 p-3 rounded-lg bg-blue-50 border border-blue-100">
+                            <div>
+                                <p class="text-[10px] font-medium text-blue-600 mb-1">現值 (不含息)</p>
+                                <p class="text-sm font-mono font-bold text-blue-900 expected-val-without"></p>
+                                <p class="text-[10px] font-mono font-medium expected-roi-without mt-0.5"></p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-medium text-blue-600 mb-1">現值 (含息)</p>
+                                <p class="text-sm font-mono font-bold text-blue-900 expected-val-with"></p>
+                                <p class="text-[10px] font-mono font-medium expected-roi-with mt-0.5"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.innerHTML = cardsHtml;
+    lucide.createIcons();
+}
+
 function renderList(filteredTrades) {
     const countEl = document.getElementById('recordCount');
     if (countEl) countEl.textContent = `${filteredTrades.length} 筆紀錄`;
@@ -318,6 +507,7 @@ function renderList(filteredTrades) {
             case 'stock': valA = a.stockName; valB = b.stockName; break;
             case 'cost': valA = cA.totalCost; valB = cB.totalCost; break;
             case 'fees': valA = cA.buyFee + cA.sellFee + cA.tax; valB = cB.buyFee + cB.sellFee + cB.tax; break;
+            case 'interest': valA = cA.interest; valB = cB.interest; break;
             case 'profit': valA = cA.profit; valB = cB.profit; break;
             case 'profitPercent': valA = cA.profitPercent; valB = cB.profitPercent; break;
             case 'holding': valA = cA.holdingDays; valB = cB.holdingDays; break;
@@ -371,24 +561,68 @@ function renderList(filteredTrades) {
              feesHtml = `<span class="text-zinc-500 font-mono text-sm">${(calc.buyFee + calc.sellFee + calc.tax).toLocaleString()}</span>`;
         }
 
+        // Interest Cell
+        const interestHtml = `<span class="text-zinc-600 font-mono text-sm">${calc.interest > 0 ? calc.interest.toLocaleString() : '-'}</span>`;
+
         // Profit Cell
         let profitHtml;
-        if (calc.isSold) {
+        if (calc.isDividend) {
+            profitHtml = `<span class="font-bold font-mono text-green-500">+${calc.interest.toLocaleString()}</span>`;
+        } else if (calc.isSold) {
             profitHtml = `<span class="font-bold font-mono ${profitColor}">${calc.profit > 0 ? '+' : ''}${calc.profit.toLocaleString()}</span>`;
         } else if (calc.expectedProfit !== undefined) {
             profitHtml = `<span class="font-mono text-sm font-medium text-blue-500"><span class="text-[10px] mr-1">試</span>${calc.expectedProfit > 0 ? '+' : ''}${calc.expectedProfit.toLocaleString()}</span>`;
+        } else if (calc.interest > 0) {
+            profitHtml = `<span class="font-bold font-mono text-green-500">+${calc.interest.toLocaleString()}</span>`;
         } else {
             profitHtml = `<span class="text-zinc-300">-</span>`;
         }
 
         // Percent Cell
         let percentHtml;
-        if (calc.isSold) {
+        if (calc.isDividend) {
+            percentHtml = `<span class="text-xs px-2 py-1 rounded-full bg-zinc-100 text-zinc-500">領息</span>`;
+        } else if (calc.isSold) {
             percentHtml = `<span class="text-xs px-2 py-1 rounded font-mono font-medium ${profitBg} ${profitColor}">${calc.profitPercent.toFixed(2)}%</span>`;
         } else if (calc.expectedProfitPercent !== undefined) {
             percentHtml = `<span class="text-xs px-2 py-1 rounded font-mono font-medium bg-blue-50 text-blue-600">${calc.expectedProfitPercent.toFixed(2)}%</span>`;
+        } else if (calc.interest > 0) {
+            percentHtml = `<span class="text-xs px-2 py-1 rounded font-mono font-medium bg-green-50 text-green-500">${calc.profitPercent.toFixed(2)}%</span>`;
         } else {
             percentHtml = `<span class="text-xs px-2 py-1 rounded-full bg-zinc-100 text-zinc-500">庫存中</span>`;
+        }
+
+        if (calc.isDividend) {
+            return `
+                <tr class="group hover:bg-zinc-50 transition-colors">
+                    <td class="p-4 text-sm text-zinc-600 whitespace-nowrap">
+                        <div>${trade.buyDate}</div>
+                    </td>
+                    <td class="p-4 whitespace-nowrap">
+                        <div class="font-medium text-zinc-900">${trade.stockName}</div>
+                        ${trade.stockSymbol ? `<div class="text-xs text-zinc-400 font-mono">${trade.stockSymbol}</div>` : ''}
+                    </td>
+                    <td class="p-4 whitespace-nowrap text-center text-zinc-400">-</td>
+                    <td class="p-4 text-center text-zinc-400">-</td>
+                    <td class="p-4 text-center text-zinc-400">-</td>
+                    <td class="p-4 text-center text-zinc-400">-</td>
+                    <td class="p-4 text-center text-zinc-400">-</td>
+                    <td class="p-4 text-center text-zinc-400">-</td>
+                    <td class="p-4 text-right whitespace-nowrap">${interestHtml}</td>
+                    <td class="p-4 text-right whitespace-nowrap">${profitHtml}</td>
+                    <td class="p-4 text-right whitespace-nowrap">${percentHtml}</td>
+                    <td class="p-4 text-center whitespace-nowrap">
+                        <div class="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onclick="openEditModal('${trade.id}')" class="p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="編輯">
+                                <i data-lucide="edit-2" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="deleteTrade('${trade.id}')" class="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="刪除">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
         }
 
         return `
@@ -406,7 +640,7 @@ function renderList(filteredTrades) {
                         <i data-lucide="clock" class="w-3.5 h-3.5 text-zinc-400"></i>
                         <span class="font-mono">${calc.holdingDays}天</span>
                     </div>
-                    ${calc.isSold ? `<div class="text-[10px] text-zinc-400 mt-0.5">年化: ${calc.annualizedReturn.toFixed(1)}%</div>` : ''}
+                    ${(calc.isSold || calc.interest > 0) ? `<div class="text-[10px] text-zinc-400 mt-0.5">年化: ${calc.annualizedReturn.toFixed(1)}%</div>` : ''}
                 </td>
                 <td class="p-4 text-right font-mono text-sm text-zinc-600 whitespace-nowrap">
                     ${Number(trade.buyPrice).toLocaleString()}
@@ -417,6 +651,7 @@ function renderList(filteredTrades) {
                 <td class="p-4 text-right font-mono text-sm text-zinc-900 whitespace-nowrap">${calc.totalCost.toLocaleString()}</td>
                 <td class="p-4 text-right font-mono text-sm whitespace-nowrap">${sellPriceHtml}</td>
                 <td class="p-4 text-right whitespace-nowrap">${feesHtml}</td>
+                <td class="p-4 text-right whitespace-nowrap">${interestHtml}</td>
                 <td class="p-4 text-right whitespace-nowrap">${profitHtml}</td>
                 <td class="p-4 text-right whitespace-nowrap">${percentHtml}</td>
                 <td class="p-4 text-center whitespace-nowrap">
@@ -463,6 +698,9 @@ function openModal() {
     document.getElementById('transactionForm').reset();
     document.getElementById('buyDate').value = new Date().toISOString().split('T')[0];
     document.getElementById('quantity').value = 1000;
+    document.getElementById('interest').value = '';
+    document.querySelector('input[name="tradeType"][value="trade"]').checked = true;
+    toggleTradeType();
     renderFormMarketTabs();
     toggleExpectedInput();
     document.getElementById('transactionModal').classList.remove('hidden');
@@ -482,6 +720,13 @@ function openEditModal(tradeId) {
     document.getElementById('modalTitle').textContent = '編輯交易';
     document.getElementById('tradeId').value = trade.id;
     
+    if (trade.type === 'dividend') {
+        document.querySelector('input[name="tradeType"][value="dividend"]').checked = true;
+    } else {
+        document.querySelector('input[name="tradeType"][value="trade"]').checked = true;
+    }
+    toggleTradeType();
+
     renderFormMarketTabs();
 
     document.getElementById('buyDate').value = trade.buyDate;
@@ -492,6 +737,7 @@ function openEditModal(tradeId) {
     document.getElementById('sellDate').value = trade.sellDate || '';
     document.getElementById('sellPrice').value = trade.sellPrice || '';
     document.getElementById('expectedSellPrice').value = trade.expectedSellPrice || '';
+    document.getElementById('interest').value = trade.interest || '';
     document.getElementById('note').value = trade.note || '';
     
     // Reset sell quantity input
@@ -512,7 +758,7 @@ function renderFormMarketTabs() {
         el.innerHTML = MARKETS.map(m => `
             <button type="button" onclick="setFormMarket('${m}')" 
                 class="flex-1 py-1.5 text-sm font-medium rounded-md transition-all ${formMarket === m ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}">
-                ${m === 'TW' ? '台股' : m === 'US' ? '美股' : '英股'}
+                ${m === 'TW' ? '台股' : m === 'US' ? '美股' : m === 'UK' ? '英股' : '債券'}
             </button>
         `).join('');
     }
@@ -522,6 +768,32 @@ function setFormMarket(m) {
     formMarket = m;
     renderFormMarketTabs();
     calculateExpected();
+}
+
+function toggleTradeType() {
+    const type = document.querySelector('input[name="tradeType"]:checked').value;
+    const tradeOnlyFields = document.getElementById('tradeOnlyFields');
+    const dateLabel = document.getElementById('dateLabel');
+    const interestLabel = document.getElementById('interestLabel');
+    const buyPriceInput = document.getElementById('buyPrice');
+    const quantityInput = document.getElementById('quantity');
+    const interestInput = document.getElementById('interest');
+
+    if (type === 'dividend') {
+        tradeOnlyFields.classList.add('hidden');
+        dateLabel.textContent = '入帳日期';
+        interestLabel.textContent = '利息金額';
+        buyPriceInput.removeAttribute('required');
+        quantityInput.removeAttribute('required');
+        interestInput.setAttribute('required', 'required');
+    } else {
+        tradeOnlyFields.classList.remove('hidden');
+        dateLabel.textContent = '買入日期';
+        interestLabel.textContent = '已收利息 (選填)';
+        buyPriceInput.setAttribute('required', 'required');
+        quantityInput.setAttribute('required', 'required');
+        interestInput.removeAttribute('required');
+    }
 }
 
 function toggleExpectedInput() {
@@ -543,6 +815,50 @@ function toggleExpectedInput() {
              document.getElementById('sellQuantity').value = document.getElementById('quantity').value;
         }
     }
+}
+
+function calculateBondExpected(inputEl, totalShares, holdingCost, realizedCostWithoutInterest, realizedProfitWithoutInterest, totalInterest, avgYears) {
+    const expectedPrice = parseFloat(inputEl.value);
+    const resultDiv = inputEl.nextElementSibling;
+    
+    if (!expectedPrice || totalShares <= 0) {
+        resultDiv.classList.add('hidden');
+        return;
+    }
+    
+    // 現值 (不含息) = 預期股價 * 總股數
+    const expectedRevenue = expectedPrice * totalShares;
+    // 現值 (含息) = 現值 (不含息) + 已領總利息
+    const expectedRevenueWithInterest = expectedRevenue + totalInterest;
+
+    // 計算總利潤
+    const expectedProfit = expectedRevenue - holdingCost;
+    const totalCost = holdingCost + realizedCostWithoutInterest;
+    
+    const totalProfitWithout = realizedProfitWithoutInterest + expectedProfit;
+    const totalProfitWith = totalProfitWithout + totalInterest;
+    
+    // 計算總報酬率 (不年化，因為使用者想看當前賣出後的整體報酬率)
+    const roiWithout = totalCost > 0 ? (totalProfitWithout / totalCost) * 100 : 0;
+    const roiWith = totalCost > 0 ? (totalProfitWith / totalCost) * 100 : 0;
+    
+    resultDiv.classList.remove('hidden');
+    
+    const valWithoutEl = resultDiv.querySelector('.expected-val-without');
+    const roiWithoutEl = resultDiv.querySelector('.expected-roi-without');
+    const valWithEl = resultDiv.querySelector('.expected-val-with');
+    const roiWithEl = resultDiv.querySelector('.expected-roi-with');
+    
+    const getProfitColor = (val) => val >= 0 ? 'text-red-600' : 'text-green-600';
+    const getSign = (val) => val > 0 ? '+' : '';
+    
+    valWithoutEl.textContent = expectedRevenue.toLocaleString(undefined, {maximumFractionDigits: 2});
+    roiWithoutEl.textContent = `總報酬率: ${getSign(roiWithout)}${roiWithout.toFixed(2)}%`;
+    roiWithoutEl.className = `text-[10px] font-mono font-medium expected-roi-without mt-0.5 ${getProfitColor(roiWithout)}`;
+    
+    valWithEl.textContent = expectedRevenueWithInterest.toLocaleString(undefined, {maximumFractionDigits: 2});
+    roiWithEl.textContent = `總報酬率: ${getSign(roiWith)}${roiWith.toFixed(2)}%`;
+    roiWithEl.className = `text-[10px] font-mono font-medium expected-roi-with mt-0.5 ${getProfitColor(roiWith)}`;
 }
 
 function calculateExpected() {
@@ -582,14 +898,18 @@ async function handleFormSubmit(e) {
     e.preventDefault();
     console.log("Form submitted");
     
+    const type = document.querySelector('input[name="tradeType"]:checked').value;
+
     // Basic trade data from form
     const trade = {
+        type: type,
         market: formMarket,
         buyDate: document.getElementById('buyDate').value,
         stockSymbol: document.getElementById('stockSymbol').value,
         stockName: document.getElementById('stockName').value,
-        buyPrice: parseFloat(document.getElementById('buyPrice').value),
-        quantity: parseFloat(document.getElementById('quantity').value),
+        buyPrice: parseFloat(document.getElementById('buyPrice').value) || 0,
+        quantity: parseFloat(document.getElementById('quantity').value) || 0,
+        interest: parseFloat(document.getElementById('interest').value) || 0,
         note: document.getElementById('note').value,
     };
 
@@ -598,50 +918,52 @@ async function handleFormSubmit(e) {
     const expectedSellPrice = document.getElementById('expectedSellPrice').value;
     const sellQuantityInput = document.getElementById('sellQuantity').value;
 
-    // Determine Sell Logic
-    let isSelling = false;
-    let sellQty = trade.quantity; // Default to full sell
+    if (type !== 'dividend') {
+        // Determine Sell Logic
+        let isSelling = false;
+        let sellQty = trade.quantity; // Default to full sell
 
-    if (sellDate || sellPrice) {
-        isSelling = true;
-        trade.sellDate = sellDate;
-        trade.sellPrice = parseFloat(sellPrice);
-        
-        if (sellQuantityInput) {
-            sellQty = parseFloat(sellQuantityInput);
+        if (sellDate || sellPrice) {
+            isSelling = true;
+            trade.sellDate = sellDate;
+            trade.sellPrice = parseFloat(sellPrice);
+            
+            if (sellQuantityInput) {
+                sellQty = parseFloat(sellQuantityInput);
+            }
+        } else if (expectedSellPrice) {
+            trade.expectedSellPrice = parseFloat(expectedSellPrice);
         }
-    } else if (expectedSellPrice) {
-        trade.expectedSellPrice = parseFloat(expectedSellPrice);
-    }
 
-    console.log("Edit ID:", editingId, "Is Selling:", isSelling, "Sell Qty:", sellQty, "Original Qty:", originalEditingQuantity);
+        console.log("Edit ID:", editingId, "Is Selling:", isSelling, "Sell Qty:", sellQty, "Original Qty:", originalEditingQuantity);
 
-    // Partial Sell Logic
-    if (editingId && isSelling && sellQty < originalEditingQuantity) {
-        console.log("Partial sell detected");
-        if (confirm(`偵測到賣出股數 (${sellQty}) 小於 原持有股數 (${originalEditingQuantity})。\n是否要自動拆分為「已賣出」與「剩餘庫存」兩筆紀錄？`)) {
-            
-            // 1. Update the SOLD part (this record becomes the sold record)
-            trade.id = editingId;
-            trade.quantity = sellQty; // Set quantity to sold amount
-            await saveTrade(trade, false);
+        // Partial Sell Logic
+        if (editingId && isSelling && sellQty < originalEditingQuantity) {
+            console.log("Partial sell detected");
+            if (confirm(`偵測到賣出股數 (${sellQty}) 小於 原持有股數 (${originalEditingQuantity})。\n是否要自動拆分為「已賣出」與「剩餘庫存」兩筆紀錄？`)) {
+                
+                // 1. Update the SOLD part (this record becomes the sold record)
+                trade.id = editingId;
+                trade.quantity = sellQty; // Set quantity to sold amount
+                await saveTrade(trade, false);
 
-            // 2. Create the REMAINING part (new record)
-            const remainingQty = originalEditingQuantity - sellQty;
-            const remainingTrade = {
-                ...trade,
-                quantity: remainingQty,
-                note: `(分拆剩餘) ${trade.note || ''}`
-            };
-            
-            // Remove sell info for the remaining part
-            delete remainingTrade.sellDate;
-            delete remainingTrade.sellPrice;
-            delete remainingTrade.expectedSellPrice;
-            delete remainingTrade.id; // Ensure it creates a new record
+                // 2. Create the REMAINING part (new record)
+                const remainingQty = originalEditingQuantity - sellQty;
+                const remainingTrade = {
+                    ...trade,
+                    quantity: remainingQty,
+                    note: `(分拆剩餘) ${trade.note || ''}`
+                };
+                
+                // Remove sell info for the remaining part
+                delete remainingTrade.sellDate;
+                delete remainingTrade.sellPrice;
+                delete remainingTrade.expectedSellPrice;
+                delete remainingTrade.id; // Ensure it creates a new record
 
-            await saveTrade(remainingTrade, true);
-            return;
+                await saveTrade(remainingTrade, true);
+                return;
+            }
         }
     }
     
@@ -658,5 +980,7 @@ window.handleFormSubmit = handleFormSubmit;
 window.handleSort = handleSort;
 window.setMarket = setMarket;
 window.toggleExpectedInput = toggleExpectedInput;
+window.toggleTradeType = toggleTradeType;
 window.calculateExpected = calculateExpected;
+window.calculateBondExpected = calculateBondExpected;
 window.setFormMarket = setFormMarket;
